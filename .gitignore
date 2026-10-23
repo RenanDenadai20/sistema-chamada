@@ -20,6 +20,8 @@ ENV/
 
 # Backups locais de banco de dados
 dados/backups/*.db
+*.db-shm
+*.db-wal
 
 # Relatorios gerados localmente (PDFs gerados em execucoes locais)
 relatorios/*.pdf

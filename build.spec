@@ -24,6 +24,7 @@ a = Analysis(
         'reportlab.graphics.shapes',
         'reportlab.pdfbase.cidfonts',
         'reportlab.pdfbase.ttfonts',
+        'docx',
     ],
     hookspath=[],
     hooksconfig={},

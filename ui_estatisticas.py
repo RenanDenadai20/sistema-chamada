@@ -127,7 +127,7 @@ class DialogoSelecaoPeriodoPDF(QDialog):
         # Cabeçalho
         header_lay = QVBoxLayout()
         header_lay.setSpacing(4)
-        lbl_titulo = QLabel("Exportar Relatório Oficial em PDF")
+        lbl_titulo = QLabel("Exportar Relatório Oficial (PDF ou Word)")
         lbl_titulo.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
         header_lay.addWidget(lbl_titulo)
 
@@ -176,7 +176,13 @@ class DialogoSelecaoPeriodoPDF(QDialog):
 
         tri_sel = trimestre_padrao or ((date.today().month - 1) // 3 + 1)
         for num, nome, meses_txt in trimestres_info:
-            rb = QRadioButton(f"<b>{nome}</b> — {meses_txt}")
+            rb = QRadioButton(f"{nome}  —  {meses_txt}")
+            rb.setStyleSheet("""
+                QRadioButton { font-weight: bold; font-size: 13px; color: #E0E6F0; padding: 5px 4px; }
+                QRadioButton::indicator { width: 18px; height: 18px; border-radius: 9px;
+                    border: 2px solid #5A6588; background: #252B3D; }
+                QRadioButton::indicator:checked { background: #6C63FF; border: 2px solid #8B85FF; }
+            """)
             rb.setProperty("tipo", "trimestral")
             rb.setProperty("trimestre", num)
             self.btn_group.addButton(rb)
@@ -235,12 +241,24 @@ class DialogoSelecaoPeriodoPDF(QDialog):
         btn_cancelar.clicked.connect(self.reject)
         btn_box.addWidget(btn_cancelar)
 
-        btn_gerar = QPushButton("Gerar Relatório PDF")
-        btn_gerar.setStyleSheet(_BTN_PDF)
-        btn_gerar.clicked.connect(self.accept)
-        btn_box.addWidget(btn_gerar)
+        btn_pdf = QPushButton("📄 Gerar PDF")
+        btn_pdf.setStyleSheet(_BTN_PDF)
+        btn_pdf.clicked.connect(lambda: (setattr(self, "_formato", "pdf"), self.accept()))
+        btn_box.addWidget(btn_pdf)
+
+        btn_word = QPushButton("📝 Gerar Word (.docx)")
+        btn_word.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #1D6FA4,stop:1 #2B8AC9);
+                color: white; border-radius: 8px; padding: 9px 20px; font-size: 13px; font-weight: bold;
+            }
+            QPushButton:hover { background: #2B8AC9; }
+        """)
+        btn_word.clicked.connect(lambda: (setattr(self, "_formato", "docx"), self.accept()))
+        btn_box.addWidget(btn_word)
 
         layout.addLayout(btn_box)
+        self._formato = "pdf"  # padrão
 
     def obter_selecao(self) -> dict:
         ano = self.ano_spin.value()
@@ -249,6 +267,7 @@ class DialogoSelecaoPeriodoPDF(QDialog):
                 "tipo": "mensal",
                 "mes": self.combo_mes.currentIndex() + 1,
                 "ano": ano,
+                "formato": self._formato,
             }
         for rb in self.radios_tri:
             if rb.isChecked():
@@ -256,8 +275,9 @@ class DialogoSelecaoPeriodoPDF(QDialog):
                     "tipo": "trimestral",
                     "trimestre": rb.property("trimestre"),
                     "ano": ano,
+                    "formato": self._formato,
                 }
-        return {"tipo": "trimestral", "trimestre": 1, "ano": ano}
+        return {"tipo": "trimestral", "trimestre": 1, "ano": ano, "formato": self._formato}
 
 
 class AbaEstatisticas(QWidget):
@@ -366,7 +386,7 @@ class AbaEstatisticas(QWidget):
 
         ctrl.addStretch()
 
-        btn_pdf = QPushButton("Gerar Relatório PDF")
+        btn_pdf = QPushButton("Gerar Relatório (PDF / Word)")
         btn_pdf.setIcon(get_icon("pdf"))
         btn_pdf.setStyleSheet(_BTN_PDF)
         btn_pdf.clicked.connect(self._gerar_pdf)
@@ -1014,8 +1034,9 @@ class AbaEstatisticas(QWidget):
 
         sel = dlg.obter_selecao()
         ano = sel["ano"]
+        fmt = sel.get("formato", "pdf")  # "pdf" ou "docx"
 
-        # Sincroniza a interface da aba com o período selecionado para que o usuário veja os dados na tela
+        # Sincroniza a interface da aba
         self.ano_spin.setValue(ano)
         if sel["tipo"] == "trimestral":
             self.tipo_periodo_combo.setCurrentIndex(1)
@@ -1025,31 +1046,43 @@ class AbaEstatisticas(QWidget):
             self.mes_combo.setCurrentIndex(sel["mes"] - 1)
         self.atualizar()
 
+        # Monta nome sugerido conforme o formato
+        nomes_curtos = {1: "Jan_Fev_Mar", 2: "Abr_Mai_Jun", 3: "Jul_Ago_Set", 4: "Out_Nov_Dez"}
+        ext = "pdf" if fmt == "pdf" else "docx"
+        ext_filtro = "PDF (*.pdf)" if fmt == "pdf" else "Word (*.docx)"
+
         if sel["tipo"] == "trimestral":
             tri_num = sel["trimestre"]
-            nomes_curtos = {1: "Jan_Fev_Mar", 2: "Abr_Mai_Jun", 3: "Jul_Ago_Set", 4: "Out_Nov_Dez"}
-            sugestao = f"Relatorio_Consolidado_ABDA_{tri_num}Trimestre_{nomes_curtos.get(tri_num, '')}_{ano}.pdf"
+            sugestao = f"Relatorio_Consolidado_ABDA_{tri_num}Trimestre_{nomes_curtos.get(tri_num, '')}_{ano}.{ext}"
         else:
             mes = sel["mes"]
-            sugestao = f"Relatorio_ABDA_{_MESES[mes-1]}_{ano}.pdf"
+            sugestao = f"Relatorio_ABDA_{_MESES[mes-1]}_{ano}.{ext}"
 
         caminho, _ = QFileDialog.getSaveFileName(
-            self, "Salvar relatório PDF",
+            self, "Salvar relatório",
             str(Path.home() / sugestao),
-            "PDF (*.pdf)"
+            ext_filtro
         )
         if not caminho:
             return
 
         try:
-            if sel["tipo"] == "trimestral":
-                self._gerar_pdf_trimestral_reportlab(caminho, sel["trimestre"], ano)
+            if fmt == "pdf":
+                if sel["tipo"] == "trimestral":
+                    self._gerar_pdf_trimestral_reportlab(caminho, sel["trimestre"], ano)
+                else:
+                    self._gerar_pdf_reportlab(caminho, sel["mes"], ano)
+                tipo_label = "PDF"
             else:
-                self._gerar_pdf_reportlab(caminho, sel["mes"], ano)
+                if sel["tipo"] == "trimestral":
+                    self._gerar_word_trimestral(caminho, sel["trimestre"], ano)
+                else:
+                    self._gerar_word_mensal(caminho, sel["mes"], ano)
+                tipo_label = "Word (.docx)"
 
             resp = QMessageBox.information(
                 self, "Relatório Concluído",
-                f"Relatório PDF salvo com sucesso em:\n{caminho}\n\nDeseja abrir o arquivo agora?",
+                f"Relatório {tipo_label} salvo com sucesso em:\n{caminho}\n\nDeseja abrir o arquivo agora?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes
             )
@@ -1060,7 +1093,7 @@ class AbaEstatisticas(QWidget):
                 except Exception:
                     pass
         except Exception as e:
-            QMessageBox.critical(self, "Erro ao gerar PDF", str(e))
+            QMessageBox.critical(self, "Erro ao gerar relatório", str(e))
 
     def _gerar_pdf_reportlab(self, caminho: str, mes: int, ano: int):
         from reportlab.lib.pagesizes import A4
@@ -1289,31 +1322,6 @@ class AbaEstatisticas(QWidget):
             ("BOTTOMPADDING", (0,0), (-1,-1), 4),
         ]))
         story.append(t_quad)
-        story.append(Spacer(1, 12))
-
-        # 5. Alerta de Frequência Baixa
-        story.append(Paragraph(f"5. Alerta de Frequência Baixa (Abaixo de {int(self.limite_spin.value())}%)", h2))
-        if baixa:
-            al_rows = [["Aluno", "Curso", "Turmas", "Presenças", "Frequência"]]
-            for b in baixa:
-                al_rows.append([b["nome"], b["curso"], b["turmas"],
-                                f"{b['presentes']}/{b['total']}", f"{b['pct']}%"])
-            t_al = Table(al_rows, colWidths=[5*cm, 3.5*cm, 5.5*cm, 2*cm, 1.5*cm])
-            t_al.setStyle(TableStyle([
-                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#92400E")),
-                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-                ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#FFF8E7"), colors.HexColor("#FFFDF0")]),
-                ("TEXTCOLOR", (4,1), (4,-1), colors.HexColor("#DC2626")),
-                ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D97706")),
-                ("FONTSIZE", (0,0), (-1,-1), 8.5),
-                ("TOPPADDING", (0,0), (-1,-1), 4),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-            ]))
-            story.append(t_al)
-        else:
-            story.append(Paragraph(f"Nenhum aluno com frequência abaixo de {int(self.limite_spin.value())}% neste período.", small))
-
         story.append(Spacer(1, 16))
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCDD")))
         story.append(Spacer(1, 4))
@@ -1644,31 +1652,6 @@ class AbaEstatisticas(QWidget):
             ("ALIGN", (1,0), (-1,-1), "CENTER"),
         ]))
         story.append(t_quad)
-        story.append(Spacer(1, 10))
-
-        # 5. Alerta de Frequência Baixa
-        story.append(Paragraph(f"5. Alerta de Frequência Baixa no Trimestre (Abaixo de {int(self.limite_spin.value())}%)", h2))
-        if baixa:
-            al_rows = [["Aluno", "Curso", "Turmas", "Presenças", "Frequência"]]
-            for b in baixa:
-                al_rows.append([b["nome"], b["curso"], b["turmas"],
-                                f"{b['presentes']}/{b['total']}", f"{b['pct']}%"])
-            t_al = Table(al_rows, colWidths=[5*cm, 3.5*cm, 5.5*cm, 2*cm, 1.5*cm])
-            t_al.setStyle(TableStyle([
-                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#92400E")),
-                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-                ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#FFF8E7"), colors.HexColor("#FFFDF0")]),
-                ("TEXTCOLOR", (4,1), (4,-1), colors.HexColor("#DC2626")),
-                ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D97706")),
-                ("FONTSIZE", (0,0), (-1,-1), 8.5),
-                ("TOPPADDING", (0,0), (-1,-1), 4),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-            ]))
-            story.append(t_al)
-        else:
-            story.append(Paragraph(f"Nenhum aluno com frequência abaixo de {int(self.limite_spin.value())}% neste trimestre.", small))
-
         story.append(Spacer(1, 14))
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCDD")))
         story.append(Spacer(1, 4))
@@ -1676,6 +1659,350 @@ class AbaEstatisticas(QWidget):
         story.append(Paragraph(f"Relatório consolidado gerado em {gerado_em} — Sistema de Chamada ABDA", small))
 
         doc.build(story)
+
+    # ──────────────────────────────────────────────────────────
+    # Geração de Relatório em Word (.docx)
+    # ──────────────────────────────────────────────────────────
+
+    def _word_add_table(self, doc_word, headers: list, rows: list, header_rgb=(44, 43, 61)):
+        """Adiciona uma tabela formatada ao documento Word."""
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+
+        table = doc_word.add_table(rows=1 + len(rows), cols=len(headers))
+        table.style = 'Table Grid'
+
+        # Cabeçalho
+        hdr_row = table.rows[0]
+        for i, h in enumerate(headers):
+            cell = hdr_row.cells[i]
+            cell.text = h
+            para = cell.paragraphs[0]
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = para.runs[0] if para.runs else para.add_run(h)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            run.font.size = Pt(9)
+            # Fundo da célula
+            tc_pr = cell._tc.get_or_add_tcPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'), 'clear')
+            shd.set(qn('w:color'), 'auto')
+            r, g, b = header_rgb
+            shd.set(qn('w:fill'), f"{r:02X}{g:02X}{b:02X}")
+            tc_pr.append(shd)
+
+        # Dados
+        for ri, row_data in enumerate(rows):
+            table_row = table.rows[ri + 1]
+            for ci, val in enumerate(row_data):
+                cell = table_row.cells[ci]
+                para = cell.paragraphs[0]
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER if ci > 0 else WD_ALIGN_PARAGRAPH.LEFT
+                run = para.add_run(str(val))
+                run.font.size = Pt(9)
+                if (ri % 2) == 0:
+                    tc_pr = cell._tc.get_or_add_tcPr()
+                    shd = OxmlElement('w:shd')
+                    shd.set(qn('w:val'), 'clear')
+                    shd.set(qn('w:color'), 'auto')
+                    shd.set(qn('w:fill'), 'F8F9FD')
+                    tc_pr.append(shd)
+        return table
+
+    def _word_header(self, doc_word, titulo_periodo: str, subtitulo: str = ""):
+        """Escreve cabeçalho padrão no documento Word."""
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        h = doc_word.add_heading('Sistema de Chamada ABDA', 0)
+        h.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        h.runs[0].font.color.rgb = RGBColor(0x1A, 0x1F, 0x2E)
+        h.runs[0].font.size = Pt(18)
+
+        if subtitulo:
+            p = doc_word.add_paragraph(subtitulo)
+            p.runs[0].font.color.rgb = RGBColor(0x6C, 0x63, 0xFF)
+            p.runs[0].font.size = Pt(10)
+
+        p2 = doc_word.add_paragraph()
+        p2.add_run('Período de Referência: ').bold = True
+        p2.add_run(titulo_periodo)
+        p2.runs[-1].font.size = Pt(10)
+        doc_word.add_paragraph()  # espaço
+
+    def _gerar_word_mensal(self, caminho: str, mes: int, ano: int):
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        stats = db.estatisticas_mes(mes, ano)
+        periodo = f"{_MESES[mes-1]} de {ano}"
+
+        doc_word = Document()
+        doc_word.core_properties.title = f"Relatório ABDA — {periodo}"
+        doc_word.core_properties.author = "Sistema de Chamada ABDA"
+
+        self._word_header(doc_word, periodo, "João Victor Pavanelli & Renan Denadai de Paula  •  Relatório Mensal")
+
+        # 1. Horas e Resumo Geral
+        doc_word.add_heading('1. Horas por Mês e Resumo Geral de Cursos', 1)
+        sm_h = stats.get('presenca_por_sexo', {})
+        rows_resumo = [
+            ["Horas Ministradas", f"{stats.get('total_horas', 0)}h ({stats.get('total_minutos', 0)} min)"],
+            ["Informática — Horas", f"{stats['horas_curso'].get('Informática', {}).get('horas', 0)}h"],
+            ["Robótica — Horas", f"{stats['horas_curso'].get('Robótica', {}).get('horas', 0)}h"],
+            ["Aulas Registradas", str(stats['horas_curso'].get('Informática', {}).get('aulas', 0) + stats['horas_curso'].get('Robótica', {}).get('aulas', 0))],
+            ["Freq. Média — Informática", f"{stats['freq'].get('Informática') or '—'}%"],
+            ["Freq. Média — Robótica", f"{stats['freq'].get('Robótica') or '—'}%"],
+        ]
+        self._word_add_table(doc_word, ["Métrica", "Valor"], rows_resumo, header_rgb=(108, 99, 255))
+        doc_word.add_paragraph()
+
+        # 2. Cursos Oferecidos
+        doc_word.add_heading('2. Cursos Oferecidos no Mês', 1)
+        rows_cursos = []
+        for c_nome in ("Informática", "Robótica"):
+            ci = stats["cursos_oferecidos"].get(c_nome, {})
+            rows_cursos.append([c_nome, str(ci.get("total_turmas", 0)), str(ci.get("turmas_ativas", 0)),
+                                 str(ci.get("aulas_no_mes", 0)), str(ci.get("matriculas", 0))])
+        self._word_add_table(doc_word, ["Curso", "Turmas Cadastradas", "Turmas Ativas", "Aulas", "Matrículas"],
+                             rows_cursos, header_rgb=(37, 43, 61))
+        doc_word.add_paragraph()
+
+        # 3. Presença por Sexo
+        doc_word.add_heading('3. Presença Mensal Detalhada por Idade e Sexo', 1)
+        sm = stats["presenca_por_sexo"]["Masculino"]
+        sf = stats["presenca_por_sexo"]["Feminino"]
+        self._word_add_table(doc_word,
+            ["Sexo", "Presenças", "Faltas", "Total Registros", "Frequência (%)"],
+            [["Masculino", sm["presentes"], sm["ausentes"], sm["total"], f"{sm['pct'] or '—'}%"],
+             ["Feminino",  sf["presentes"], sf["ausentes"], sf["total"], f"{sf['pct'] or '—'}%"]],
+            header_rgb=(55, 65, 81))
+        doc_word.add_paragraph()
+
+        idades_dados = stats.get("presenca_por_idade", {})
+        if idades_dados:
+            rows_id = [[f"{ida} anos", d['Masculino']['presentes'], d['Feminino']['presentes'], d['total_presentes']]
+                       for ida, d in sorted(idades_dados.items())]
+            self._word_add_table(doc_word, ["Idade", "Presenças Masculino", "Presenças Feminino", "Geral (Total)"],
+                                 rows_id, header_rgb=(75, 85, 99))
+            doc_word.add_paragraph()
+
+        # 3b. Matriculados por Idade
+        doc_word.add_heading('3b. Quantidade de Alunos Matriculados por Idade e Sexo', 1)
+        idades_rows = stats.get("idades_rows", [])
+        if idades_rows:
+            from datetime import date as _date, datetime as _dt
+            alunos_por_idade: dict = {}
+            hoje = _date.today()
+            for row in idades_rows:
+                try:
+                    d = _dt.strptime(row["data_nascimento"], "%Y-%m-%d").date()
+                    ida = hoje.year - d.year - ((hoje.month, hoje.day) < (d.month, d.day))
+                except Exception:
+                    continue
+                gen = row.get("genero") or "Não informado"
+                alunos_por_idade.setdefault(ida, {"Masculino": 0, "Feminino": 0, "Não informado": 0})
+                alunos_por_idade[ida][gen] = alunos_por_idade[ida].get(gen, 0) + 1
+            rows_matr = []
+            for ida in sorted(alunos_por_idade):
+                d = alunos_por_idade[ida]
+                m, f, ni = d.get("Masculino", 0), d.get("Feminino", 0), d.get("Não informado", 0)
+                rows_matr.append([f"{ida} anos", m, f, ni, m + f + ni])
+            self._word_add_table(doc_word, ["Idade", "Masculino", "Feminino", "Não Informado", "Total"],
+                                 rows_matr, header_rgb=(55, 65, 81))
+            doc_word.add_paragraph()
+
+        # 4. Quadrimestres
+        doc_word.add_heading(f'4. Evolução por Quadrimestre — {ano}', 1)
+        rows_quad = []
+        for q in stats.get("quadrimestres", []):
+            sfx = " ativos" if q["teve_aulas"] else " mat."
+            rows_quad.append([q["quadrimestre"],
+                f"{q['info_ativos'] if q['teve_aulas'] else q['info_cadastrados']}{sfx}",
+                f"{q['robo_ativos'] if q['teve_aulas'] else q['robo_cadastrados']}{sfx}",
+                f"{q['ambos_ativos'] if q['teve_aulas'] else q['ambos_cadastrados']}{sfx}",
+                f"{q['total_ativos'] if q['teve_aulas'] else q['total_cadastrados']}{sfx}"])
+        self._word_add_table(doc_word, ["Quadrimestre", "Informática", "Robótica", "Ambos", "Total"],
+                             rows_quad, header_rgb=(108, 99, 255))
+        doc_word.add_paragraph()
+
+        gerado_em = datetime.now().strftime("%d/%m/%Y às %H:%M")
+        p = doc_word.add_paragraph(f"Relatório gerado em {gerado_em} — Sistema de Chamada ABDA")
+        p.runs[0].font.size = Pt(8)
+        p.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+        doc_word.save(caminho)
+
+    def _gerar_word_trimestral(self, caminho: str, trimestre: int, ano: int):
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        stats = db.estatisticas_trimestre(trimestre, ano)
+        tri_nome = stats["trimestre_nome"]
+        meses = stats["meses"]
+        meses_nomes = [_MESES[m - 1] for m in meses]
+        dm = stats["dados_mensais"]
+        m1, m2, m3 = meses[0], meses[1], meses[2]
+
+        doc_word = Document()
+        doc_word.core_properties.title = f"Relatório Consolidado ABDA — {tri_nome} {ano}"
+        doc_word.core_properties.author = "Sistema de Chamada ABDA"
+
+        self._word_header(doc_word, f"{tri_nome} de {ano} ({', '.join(meses_nomes)})",
+                          "João Victor Pavanelli & Renan Denadai de Paula  •  Relatório Trimestral Consolidado")
+
+        # 1. Resumo Comparativo Mês a Mês
+        doc_word.add_heading('1. Horas por Mês e Resumo Geral de Cursos (Trimestre Consolidado)', 1)
+
+        def _mes_atend(dm_m):
+            return str((dm_m["contagem"].get("so_info") or 0) + (dm_m["contagem"].get("so_robo") or 0) + (dm_m["contagem"].get("ambos") or 0))
+
+        rows_res = [
+            ["Horas — Informática",
+             f"{dm[m1]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+             f"{dm[m2]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+             f"{dm[m3]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+             f"{stats['horas_curso']['Informática']['horas']}h"],
+            ["Horas — Robótica",
+             f"{dm[m1]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+             f"{dm[m2]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+             f"{dm[m3]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+             f"{stats['horas_curso']['Robótica']['horas']}h"],
+            ["Total Horas",
+             f"{dm[m1]['total_horas']}h", f"{dm[m2]['total_horas']}h", f"{dm[m3]['total_horas']}h",
+             f"{stats['total_horas']}h ({stats['total_minutos']} min)"],
+            ["Aulas Registradas",
+             str(dm[m1]['horas_curso'].get('Informática',{}).get('aulas',0)+dm[m1]['horas_curso'].get('Robótica',{}).get('aulas',0)),
+             str(dm[m2]['horas_curso'].get('Informática',{}).get('aulas',0)+dm[m2]['horas_curso'].get('Robótica',{}).get('aulas',0)),
+             str(dm[m3]['horas_curso'].get('Informática',{}).get('aulas',0)+dm[m3]['horas_curso'].get('Robótica',{}).get('aulas',0)),
+             str(stats['horas_curso']['Informática']['aulas'] + stats['horas_curso']['Robótica']['aulas'])],
+            ["Freq. Média — Informática",
+             f"{dm[m1]['freq'].get('Informática') or '—'}%",
+             f"{dm[m2]['freq'].get('Informática') or '—'}%",
+             f"{dm[m3]['freq'].get('Informática') or '—'}%",
+             f"{stats['freq'].get('Informática') or '—'}%"],
+            ["Freq. Média — Robótica",
+             f"{dm[m1]['freq'].get('Robótica') or '—'}%",
+             f"{dm[m2]['freq'].get('Robótica') or '—'}%",
+             f"{dm[m3]['freq'].get('Robótica') or '—'}%",
+             f"{stats['freq'].get('Robótica') or '—'}%"],
+            ["Atendimentos Ativos", _mes_atend(dm[m1]), _mes_atend(dm[m2]), _mes_atend(dm[m3]),
+             f"{stats['atendimentos_acumulados']} acumulados"],
+            ["Presenças — Masculino",
+             str(dm[m1]["presenca_por_sexo"]["Masculino"]["presentes"]),
+             str(dm[m2]["presenca_por_sexo"]["Masculino"]["presentes"]),
+             str(dm[m3]["presenca_por_sexo"]["Masculino"]["presentes"]),
+             str(stats["presenca_por_sexo"]["Masculino"]["presentes"])],
+            ["Presenças — Feminino",
+             str(dm[m1]["presenca_por_sexo"]["Feminino"]["presentes"]),
+             str(dm[m2]["presenca_por_sexo"]["Feminino"]["presentes"]),
+             str(dm[m3]["presenca_por_sexo"]["Feminino"]["presentes"]),
+             str(stats["presenca_por_sexo"]["Feminino"]["presentes"])],
+            ["Total Geral de Presenças",
+             str(dm[m1]["presenca_por_sexo"]["Masculino"]["presentes"] + dm[m1]["presenca_por_sexo"]["Feminino"]["presentes"]),
+             str(dm[m2]["presenca_por_sexo"]["Masculino"]["presentes"] + dm[m2]["presenca_por_sexo"]["Feminino"]["presentes"]),
+             str(dm[m3]["presenca_por_sexo"]["Masculino"]["presentes"] + dm[m3]["presenca_por_sexo"]["Feminino"]["presentes"]),
+             str(stats["presenca_por_sexo"]["Masculino"]["presentes"] + stats["presenca_por_sexo"]["Feminino"]["presentes"])],
+        ]
+        self._word_add_table(doc_word,
+            ["Métrica / Indicador", meses_nomes[0], meses_nomes[1], meses_nomes[2], "Total do Trimestre"],
+            rows_res, header_rgb=(108, 99, 255))
+        doc_word.add_paragraph()
+
+        # 2. Cursos e Beneficiários
+        doc_word.add_heading('2. Cursos Oferecidos e Beneficiários Atendidos no Trimestre', 1)
+        rows_cursos = []
+        for c_nome in ("Informática", "Robótica"):
+            ci = stats["cursos_oferecidos"].get(c_nome, {})
+            rows_cursos.append([c_nome, str(ci.get("total_turmas", 0)), str(ci.get("turmas_ativas", 0)),
+                                 str(ci.get("aulas_no_periodo", 0)), str(ci.get("matriculas", 0))])
+        self._word_add_table(doc_word, ["Curso", "Turmas Cadastradas", "Turmas Ativas", "Aulas", "Matrículas"],
+                             rows_cursos, header_rgb=(37, 43, 61))
+        doc_word.add_paragraph()
+
+        # Beneficiários únicos
+        bg_m = stats["beneficiarios_genero"].get("Masculino", 0)
+        bg_f = stats["beneficiarios_genero"].get("Feminino", 0)
+        bu_tot = stats["beneficiarios_unicos_total"]
+        cnt = stats["contagem"]
+        tot_cad = (cnt.get("so_info") or 0) + (cnt.get("so_robo") or 0) + (cnt.get("ambos") or 0)
+        self._word_add_table(doc_word,
+            ["Indicador de Beneficiários", "Masculino", "Feminino", "Total Consolidado"],
+            [["Total de Beneficiários Únicos", str(bg_m), str(bg_f), f"{bu_tot} alunos únicos"],
+             ["Atendimentos Mensais Acumulados", "—", "—", f"{stats['atendimentos_acumulados']} atendimentos"],
+             ["Alunos Matriculados (BD)", "—", "—", f"{tot_cad} (Ambos: {cnt.get('ambos', 0)})"]],
+            header_rgb=(30, 37, 56))
+        doc_word.add_paragraph()
+
+        # 3. Presença por Sexo
+        doc_word.add_heading('3. Presença no Trimestre Detalhada por Idade e Sexo', 1)
+        sm = stats["presenca_por_sexo"]["Masculino"]
+        sf = stats["presenca_por_sexo"]["Feminino"]
+        self._word_add_table(doc_word,
+            ["Sexo", "Presenças", "Faltas", "Total Registros", "Frequência (%)"],
+            [["Masculino", sm["presentes"], sm["ausentes"], sm["total"], f"{sm['pct'] or '—'}%"],
+             ["Feminino",  sf["presentes"], sf["ausentes"], sf["total"], f"{sf['pct'] or '—'}%"]],
+            header_rgb=(55, 65, 81))
+        doc_word.add_paragraph()
+
+        idades_dados = stats.get("presenca_por_idade", {})
+        if idades_dados:
+            rows_id = [[f"{ida} anos", d['Masculino']['presentes'], d['Feminino']['presentes'], d['total_presentes']]
+                       for ida, d in sorted(idades_dados.items())]
+            self._word_add_table(doc_word, ["Idade", "Presenças Masculino", "Presenças Feminino", "Geral (Total)"],
+                                 rows_id, header_rgb=(75, 85, 99))
+            doc_word.add_paragraph()
+
+        # 3b. Matriculados
+        doc_word.add_heading('3b. Quantidade de Alunos Matriculados por Idade e Sexo', 1)
+        idades_rows = stats.get("idades_rows", [])
+        if idades_rows:
+            from datetime import date as _date, datetime as _dt
+            alunos_por_idade: dict = {}
+            hoje = _date.today()
+            for row in idades_rows:
+                try:
+                    d = _dt.strptime(row["data_nascimento"], "%Y-%m-%d").date()
+                    ida = hoje.year - d.year - ((hoje.month, hoje.day) < (d.month, d.day))
+                except Exception:
+                    continue
+                gen = row.get("genero") or "Não informado"
+                alunos_por_idade.setdefault(ida, {"Masculino": 0, "Feminino": 0, "Não informado": 0})
+                alunos_por_idade[ida][gen] = alunos_por_idade[ida].get(gen, 0) + 1
+            rows_matr = []
+            for ida in sorted(alunos_por_idade):
+                d = alunos_por_idade[ida]
+                m, f, ni = d.get("Masculino", 0), d.get("Feminino", 0), d.get("Não informado", 0)
+                rows_matr.append([f"{ida} anos", m, f, ni, m + f + ni])
+            self._word_add_table(doc_word, ["Idade", "Masculino", "Feminino", "Não Informado", "Total"],
+                                 rows_matr, header_rgb=(55, 65, 81))
+            doc_word.add_paragraph()
+
+        # 4. Quadrimestres
+        doc_word.add_heading(f'4. Evolução de Alunos por Curso a Cada 4 Meses — {ano}', 1)
+        rows_quad = []
+        for q in stats.get("quadrimestres", []):
+            sfx = " ativos" if q["teve_aulas"] else " mat."
+            rows_quad.append([q["quadrimestre"],
+                f"{q['info_ativos'] if q['teve_aulas'] else q['info_cadastrados']}{sfx}",
+                f"{q['robo_ativos'] if q['teve_aulas'] else q['robo_cadastrados']}{sfx}",
+                f"{q['ambos_ativos'] if q['teve_aulas'] else q['ambos_cadastrados']}{sfx}",
+                f"{q['total_ativos'] if q['teve_aulas'] else q['total_cadastrados']}{sfx}"])
+        self._word_add_table(doc_word, ["Quadrimestre", "Informática", "Robótica", "Ambos", "Total"],
+                             rows_quad, header_rgb=(108, 99, 255))
+        doc_word.add_paragraph()
+
+        gerado_em = datetime.now().strftime("%d/%m/%Y às %H:%M")
+        p = doc_word.add_paragraph(f"Relatório consolidado gerado em {gerado_em} — Sistema de Chamada ABDA")
+        p.runs[0].font.size = Pt(8)
+        p.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+        doc_word.save(caminho)
 
     def _combo_style(self):
         return """QComboBox {
