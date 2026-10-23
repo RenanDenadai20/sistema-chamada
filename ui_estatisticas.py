@@ -96,16 +96,36 @@ class AbaEstatisticas(QWidget):
         ctrl.setContentsMargins(14, 10, 14, 10)
         ctrl.setSpacing(12)
 
-        ctrl_label = QLabel("Período:")
+        ctrl_label = QLabel("Visualização:")
         ctrl_label.setStyleSheet("color: #9AA3C0; font-size: 13px; font-weight: bold;")
         ctrl.addWidget(ctrl_label)
 
+        self.tipo_periodo_combo = QComboBox()
+        self.tipo_periodo_combo.addItem("Mensal")
+        self.tipo_periodo_combo.addItem("Trimestral (Consolidado)")
+        self.tipo_periodo_combo.setStyleSheet(self._combo_style())
+        self.tipo_periodo_combo.currentIndexChanged.connect(self._on_tipo_periodo_changed)
+        ctrl.addWidget(self.tipo_periodo_combo)
+
+        # Seletor de Mês (modo mensal)
         self.mes_combo = QComboBox()
         for m in _MESES:
             self.mes_combo.addItem(m)
         self.mes_combo.setCurrentIndex(date.today().month - 1)
         self.mes_combo.setStyleSheet(self._combo_style())
         ctrl.addWidget(self.mes_combo)
+
+        # Seletor de Trimestre (modo trimestral)
+        self.trimestre_combo = QComboBox()
+        self.trimestre_combo.addItem("1º Trimestre (Jan – Mar)", 1)
+        self.trimestre_combo.addItem("2º Trimestre (Abr – Jun)", 2)
+        self.trimestre_combo.addItem("3º Trimestre (Jul – Set)", 3)
+        self.trimestre_combo.addItem("4º Trimestre (Out – Dez)", 4)
+        tri_atual = (date.today().month - 1) // 3
+        self.trimestre_combo.setCurrentIndex(tri_atual)
+        self.trimestre_combo.setStyleSheet(self._combo_style())
+        self.trimestre_combo.setVisible(False)
+        ctrl.addWidget(self.trimestre_combo)
 
         self.ano_spin = QSpinBox()
         self.ano_spin.setRange(2020, 2050)
@@ -157,10 +177,16 @@ class AbaEstatisticas(QWidget):
 
         self._content_layout.addWidget(ctrl_frame)
 
+    def _on_tipo_periodo_changed(self, idx: int):
+        is_mensal = (idx == 0)
+        self.mes_combo.setVisible(is_mensal)
+        self.trimestre_combo.setVisible(not is_mensal)
+        self.atualizar()
+
     def atualizar(self):
-        mes = self.mes_combo.currentIndex() + 1
         ano = self.ano_spin.value()
         limite = self.limite_spin.value()
+        is_mensal = (self.tipo_periodo_combo.currentIndex() == 0)
 
         # CORREÇÃO DE BUG VISUAL:
         # Destrói completamente o widget dinâmico anterior antes de criar o novo
@@ -176,7 +202,16 @@ class AbaEstatisticas(QWidget):
         dyn_lay.setContentsMargins(0, 0, 0, 0)
         self._content_layout.addWidget(self._dyn_widget)
 
-        stats = db.estatisticas_mes(mes, ano)
+        if is_mensal:
+            mes = self.mes_combo.currentIndex() + 1
+            stats = db.estatisticas_mes(mes, ano)
+            self._renderizar_mensal(dyn_lay, stats, mes, ano, limite)
+        else:
+            tri_num = self.trimestre_combo.currentData() or (self.trimestre_combo.currentIndex() + 1)
+            stats = db.estatisticas_trimestre(tri_num, ano)
+            self._renderizar_trimestral(dyn_lay, stats, ano, limite)
+
+    def _renderizar_mensal(self, dyn_lay: QVBoxLayout, stats: dict, mes: int, ano: int, limite: float):
         mes_nome = _MESES[mes - 1]
         titulo_periodo = f"{mes_nome} de {ano}"
 
@@ -307,14 +342,14 @@ class AbaEstatisticas(QWidget):
         s_box.addStretch()
         gd_lay.addLayout(s_box)
 
-        # Tabela por Idade e Sexo
+        # Tabela por Idade e Sexo (números exatos de presenças — Obs 2)
         tbl_idade_sexo = QTableWidget()
-        tbl_idade_sexo.setColumnCount(5)
+        tbl_idade_sexo.setColumnCount(4)
         tbl_idade_sexo.setHorizontalHeaderLabels([
-            "Idade", "Presença Masculino", "Presença Feminino", "Frequência Geral da Idade", "Total de Registros"
+            "Idade", "Presenças Masculino", "Presenças Feminino", "Geral da Idade (Total de Presenças)"
         ])
         tbl_idade_sexo.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for ci in range(1, 5):
+        for ci in range(1, 4):
             tbl_idade_sexo.horizontalHeader().setSectionResizeMode(ci, QHeaderView.Stretch)
         tbl_idade_sexo.setAlternatingRowColors(True)
         tbl_idade_sexo.verticalHeader().setVisible(False)
@@ -326,20 +361,19 @@ class AbaEstatisticas(QWidget):
             tbl_idade_sexo.setRowCount(len(idades_dados))
             for ri, ida in enumerate(sorted(idades_dados.keys())):
                 d = idades_dados[ida]
-                m_txt = f"{d['Masculino']['pct']}% ({d['Masculino']['presentes']}/{d['Masculino']['total']})" if d['Masculino']['pct'] is not None else "—"
-                f_txt = f"{d['Feminino']['pct']}% ({d['Feminino']['presentes']}/{d['Feminino']['total']})" if d['Feminino']['pct'] is not None else "—"
-                g_txt = f"{d['pct']}%" if d['pct'] is not None else "—"
+                item_ida = QTableWidgetItem(f"{ida} anos")
+                item_m = QTableWidgetItem(str(d['Masculino']['presentes']))
+                item_m.setTextAlignment(Qt.AlignCenter)
+                item_f = QTableWidgetItem(str(d['Feminino']['presentes']))
+                item_f.setTextAlignment(Qt.AlignCenter)
+                item_g = QTableWidgetItem(str(d['total_presentes']))
+                item_g.setTextAlignment(Qt.AlignCenter)
+                item_g.setForeground(QColor("#10B981"))
 
-                tbl_idade_sexo.setItem(ri, 0, QTableWidgetItem(f"{ida} anos"))
-                tbl_idade_sexo.setItem(ri, 1, QTableWidgetItem(m_txt))
-                tbl_idade_sexo.setItem(ri, 2, QTableWidgetItem(f_txt))
-
-                item_g = QTableWidgetItem(g_txt)
-                if d['pct'] is not None:
-                    item_g.setForeground(QColor("#10B981") if d['pct'] >= 75 else QColor("#F87171"))
+                tbl_idade_sexo.setItem(ri, 0, item_ida)
+                tbl_idade_sexo.setItem(ri, 1, item_m)
+                tbl_idade_sexo.setItem(ri, 2, item_f)
                 tbl_idade_sexo.setItem(ri, 3, item_g)
-
-                tbl_idade_sexo.setItem(ri, 4, QTableWidgetItem(f"{d['total_presentes']}/{d['total_registros']} presenças"))
                 tbl_idade_sexo.setRowHeight(ri, 32)
             tbl_idade_sexo.setFixedHeight(min(240, 36 + len(idades_dados) * 32))
             gd_lay.addWidget(tbl_idade_sexo)
@@ -498,21 +532,299 @@ class AbaEstatisticas(QWidget):
 
         dyn_lay.addWidget(grp_alerta)
 
+    def _renderizar_trimestral(self, dyn_lay: QVBoxLayout, stats: dict, ano: int, limite: float):
+        tri_nome = stats["trimestre_nome"]
+        meses = stats["meses"]
+        meses_nomes = [_MESES[m - 1] for m in meses]
+
+        # Cabeçalho da seção
+        hdr_box = QHBoxLayout()
+        titulo = QLabel(f"Estatísticas Gerais — {tri_nome} de {ano}")
+        titulo.setStyleSheet("color: #E0E6F0; font-size: 18px; font-weight: bold;")
+        hdr_box.addWidget(titulo)
+        hdr_box.addStretch()
+        dyn_lay.addLayout(hdr_box)
+
+        # 1. CARDS PRINCIPAIS
+        cards_grid = QGridLayout()
+        cards_grid.setSpacing(12)
+
+        h_info = stats["horas_curso"].get("Informática", {})
+        h_robo = stats["horas_curso"].get("Robótica", {})
+        cards_grid.addWidget(
+            _card(
+                "Horas de Aula no Trimestre",
+                f"{stats['total_horas']}h",
+                f"Informática: {h_info.get('horas', 0)}h | Robótica: {h_robo.get('horas', 0)}h",
+                "#F59E0B"
+            ),
+            0, 0
+        )
+
+        bg_m = stats["beneficiarios_genero"].get("Masculino", 0)
+        bg_f = stats["beneficiarios_genero"].get("Feminino", 0)
+        cards_grid.addWidget(
+            _card(
+                "Beneficiários Atendidos no Trimestre",
+                f"{stats['beneficiarios_unicos_total']} únicos",
+                f"Atendimentos Acumulados: {stats['atendimentos_acumulados']} | Masc: {bg_m} | Fem: {bg_f}",
+                "#6C63FF"
+            ),
+            0, 1
+        )
+
+        pres_info = stats["presenca_cursos"].get("Informática", {})
+        p_info_pct = f"{pres_info.get('pct')}%" if pres_info.get("pct") is not None else "Sem aulas"
+        p_info_sub = f"Presenças: {pres_info.get('presentes', 0)} | Faltas: {pres_info.get('ausentes', 0)}"
+        cards_grid.addWidget(
+            _card("Presença Trimestral — Informática", p_info_pct, p_info_sub, "#10B981"),
+            0, 2
+        )
+
+        pres_robo = stats["presenca_cursos"].get("Robótica", {})
+        p_robo_pct = f"{pres_robo.get('pct')}%" if pres_robo.get("pct") is not None else "Sem aulas"
+        p_robo_sub = f"Presenças: {pres_robo.get('presentes', 0)} | Faltas: {pres_robo.get('ausentes', 0)}"
+        cards_grid.addWidget(
+            _card("Presença Trimestral — Robótica", p_robo_pct, p_robo_sub, "#10B981"),
+            0, 3
+        )
+
+        dyn_lay.addLayout(cards_grid)
+
+        # 2. COMPARATIVO MÊS A MÊS DO TRIMESTRE E TOTAL
+        grp_mensal = QGroupBox("1. Comparativo Mês a Mês do Trimestre e Total Consolidado")
+        grp_mensal.setStyleSheet(self._grp_style())
+        gm_lay = QVBoxLayout(grp_mensal)
+
+        tbl_m = QTableWidget()
+        tbl_m.setColumnCount(5)
+        tbl_m.setHorizontalHeaderLabels([
+            "Métrica / Indicador", meses_nomes[0], meses_nomes[1], meses_nomes[2], "Total do Trimestre"
+        ])
+        tbl_m.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for ci in range(1, 5):
+            tbl_m.horizontalHeader().setSectionResizeMode(ci, QHeaderView.ResizeToContents)
+        tbl_m.setAlternatingRowColors(True)
+        tbl_m.verticalHeader().setVisible(False)
+        tbl_m.setEditTriggers(QTableWidget.NoEditTriggers)
+        tbl_m.setStyleSheet(self._table_style())
+
+        dm = stats["dados_mensais"]
+        m1, m2, m3 = meses[0], meses[1], meses[2]
+
+        linhas_comparativo = [
+            ("Horas — Informática",
+             f"{dm[m1]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+             f"{dm[m2]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+             f"{dm[m3]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+             f"{stats['horas_curso']['Informática']['horas']}h"),
+            ("Horas — Robótica",
+             f"{dm[m1]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+             f"{dm[m2]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+             f"{dm[m3]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+             f"{stats['horas_curso']['Robótica']['horas']}h"),
+            ("Total Horas Ministradas",
+             f"{dm[m1]['total_horas']}h",
+             f"{dm[m2]['total_horas']}h",
+             f"{dm[m3]['total_horas']}h",
+             f"{stats['total_horas']}h"),
+            ("Aulas Registradas",
+             str(dm[m1]['horas_curso'].get('Informática', {}).get('aulas', 0) + dm[m1]['horas_curso'].get('Robótica', {}).get('aulas', 0)),
+             str(dm[m2]['horas_curso'].get('Informática', {}).get('aulas', 0) + dm[m2]['horas_curso'].get('Robótica', {}).get('aulas', 0)),
+             str(dm[m3]['horas_curso'].get('Informática', {}).get('aulas', 0) + dm[m3]['horas_curso'].get('Robótica', {}).get('aulas', 0)),
+             str(stats['horas_curso']['Informática']['aulas'] + stats['horas_curso']['Robótica']['aulas'])),
+            ("Freq. Média — Informática",
+             f"{dm[m1]['freq'].get('Informática') or '—'}%",
+             f"{dm[m2]['freq'].get('Informática') or '—'}%",
+             f"{dm[m3]['freq'].get('Informática') or '—'}%",
+             f"{stats['freq'].get('Informática') or '—'}%"),
+            ("Freq. Média — Robótica",
+             f"{dm[m1]['freq'].get('Robótica') or '—'}%",
+             f"{dm[m2]['freq'].get('Robótica') or '—'}%",
+             f"{dm[m3]['freq'].get('Robótica') or '—'}%",
+             f"{stats['freq'].get('Robótica') or '—'}%"),
+            ("Atendimentos Ativos no Mês",
+             str((dm[m1]["contagem"].get("so_info") or 0) + (dm[m1]["contagem"].get("so_robo") or 0) + (dm[m1]["contagem"].get("ambos") or 0)),
+             str((dm[m2]["contagem"].get("so_info") or 0) + (dm[m2]["contagem"].get("so_robo") or 0) + (dm[m2]["contagem"].get("ambos") or 0)),
+             str((dm[m3]["contagem"].get("so_info") or 0) + (dm[m3]["contagem"].get("so_robo") or 0) + (dm[m3]["contagem"].get("ambos") or 0)),
+             f"{stats['atendimentos_acumulados']} acumulados"),
+        ]
+        tbl_m.setRowCount(len(linhas_comparativo))
+        for ri, row in enumerate(linhas_comparativo):
+            for ci, val in enumerate(row):
+                it = QTableWidgetItem(val)
+                if ci > 0:
+                    it.setTextAlignment(Qt.AlignCenter)
+                tbl_m.setItem(ri, ci, it)
+            tbl_m.setRowHeight(ri, 30)
+        tbl_m.setFixedHeight(min(270, 36 + len(linhas_comparativo) * 30))
+        gm_lay.addWidget(tbl_m)
+        dyn_lay.addWidget(grp_mensal)
+
+        # 3. CURSOS OFERECIDOS NO TRIMESTRE
+        grp_cursos = QGroupBox("2. Cursos Oferecidos no Trimestre")
+        grp_cursos.setStyleSheet(self._grp_style())
+        gc_lay = QVBoxLayout(grp_cursos)
+
+        tbl_c = QTableWidget()
+        tbl_c.setColumnCount(5)
+        tbl_c.setHorizontalHeaderLabels([
+            "Curso", "Turmas Cadastradas", "Turmas Ativas no Trimestre", "Aulas no Trimestre", "Matrículas Ativas"
+        ])
+        tbl_c.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for ci in range(1, 5):
+            tbl_c.horizontalHeader().setSectionResizeMode(ci, QHeaderView.ResizeToContents)
+        tbl_c.setAlternatingRowColors(True)
+        tbl_c.verticalHeader().setVisible(False)
+        tbl_c.setEditTriggers(QTableWidget.NoEditTriggers)
+        tbl_c.setStyleSheet(self._table_style())
+        tbl_c.setRowCount(2)
+        for ri, c_nome in enumerate(("Informática", "Robótica")):
+            ci = stats["cursos_oferecidos"].get(c_nome, {})
+            tbl_c.setItem(ri, 0, QTableWidgetItem(c_nome))
+            tbl_c.setItem(ri, 1, QTableWidgetItem(str(ci.get("total_turmas", 0))))
+            tbl_c.setItem(ri, 2, QTableWidgetItem(str(ci.get("turmas_ativas", 0))))
+            tbl_c.setItem(ri, 3, QTableWidgetItem(str(ci.get("aulas_no_periodo", 0))))
+            tbl_c.setItem(ri, 4, QTableWidgetItem(str(ci.get("matriculas", 0))))
+            tbl_c.setRowHeight(ri, 32)
+        tbl_c.setFixedHeight(105)
+        gc_lay.addWidget(tbl_c)
+        dyn_lay.addWidget(grp_cursos)
+
+        # 4. PRESENÇA NO TRIMESTRE DETALHADA POR IDADE E SEXO (NÚMEROS EXATOS — Obs 2)
+        grp_det = QGroupBox("3. Presença no Trimestre Detalhada por Idade e Sexo (Números Exatos de Presenças)")
+        grp_det.setStyleSheet(self._grp_style())
+        gd_lay = QVBoxLayout(grp_det)
+
+        sm = stats["presenca_por_sexo"]["Masculino"]
+        sf = stats["presenca_por_sexo"]["Feminino"]
+        s_box = QHBoxLayout()
+        lbl_m = QLabel(
+            f"<b>Masculino:</b> {sm['presentes']} presenças | {sm['ausentes']} faltas ({sm['pct'] or '—'}% frequência)"
+        )
+        lbl_m.setStyleSheet("color: #E0E6F0; font-size: 13px; background: #1E2538; padding: 6px 12px; border-radius: 6px;")
+        lbl_f = QLabel(
+            f"<b>Feminino:</b> {sf['presentes']} presenças | {sf['ausentes']} faltas ({sf['pct'] or '—'}% frequência)"
+        )
+        lbl_f.setStyleSheet("color: #E0E6F0; font-size: 13px; background: #1E2538; padding: 6px 12px; border-radius: 6px;")
+        s_box.addWidget(lbl_m)
+        s_box.addWidget(lbl_f)
+        s_box.addStretch()
+        gd_lay.addLayout(s_box)
+
+        tbl_ida = QTableWidget()
+        tbl_ida.setColumnCount(4)
+        tbl_ida.setHorizontalHeaderLabels([
+            "Idade", "Presenças Masculino", "Presenças Feminino", "Geral da Idade (Total de Presenças)"
+        ])
+        tbl_ida.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for ci in range(1, 4):
+            tbl_ida.horizontalHeader().setSectionResizeMode(ci, QHeaderView.Stretch)
+        tbl_ida.setAlternatingRowColors(True)
+        tbl_ida.verticalHeader().setVisible(False)
+        tbl_ida.setEditTriggers(QTableWidget.NoEditTriggers)
+        tbl_ida.setStyleSheet(self._table_style())
+
+        idades_dados = stats.get("presenca_por_idade", {})
+        if idades_dados:
+            tbl_ida.setRowCount(len(idades_dados))
+            for ri, ida in enumerate(sorted(idades_dados.keys())):
+                d = idades_dados[ida]
+                item_ida = QTableWidgetItem(f"{ida} anos")
+                item_m = QTableWidgetItem(str(d['Masculino']['presentes']))
+                item_m.setTextAlignment(Qt.AlignCenter)
+                item_f = QTableWidgetItem(str(d['Feminino']['presentes']))
+                item_f.setTextAlignment(Qt.AlignCenter)
+                item_g = QTableWidgetItem(str(d['total_presentes']))
+                item_g.setTextAlignment(Qt.AlignCenter)
+                item_g.setForeground(QColor("#10B981"))
+
+                tbl_ida.setItem(ri, 0, item_ida)
+                tbl_ida.setItem(ri, 1, item_m)
+                tbl_ida.setItem(ri, 2, item_f)
+                tbl_ida.setItem(ri, 3, item_g)
+                tbl_ida.setRowHeight(ri, 32)
+            tbl_ida.setFixedHeight(min(240, 36 + len(idades_dados) * 32))
+            gd_lay.addWidget(tbl_ida)
+        else:
+            sem_dados = QLabel("Nenhuma chamada realizada com registro de nascimento neste trimestre.")
+            sem_dados.setStyleSheet("color: #8A94B0; font-size: 12px; padding: 6px;")
+            gd_lay.addWidget(sem_dados)
+        dyn_lay.addWidget(grp_det)
+
+        # 5. ALERTA DE FREQUÊNCIA BAIXA NO TRIMESTRE
+        baixa = db.alunos_freq_baixa_trimestre(stats["trimestre"], ano, limite)
+        grp_alerta = QGroupBox(f"Alerta: Frequência Abaixo de {int(limite)}% no Trimestre")
+        grp_alerta.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #F59E0B; border-radius: 10px;
+                margin-top: 8px; color: #FBBF24; font-size: 13px; font-weight: bold;
+                background: #1F1A00; padding: 12px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; }
+        """)
+        alerta_lay = QVBoxLayout(grp_alerta)
+        if baixa:
+            tbl_al = QTableWidget()
+            tbl_al.setColumnCount(5)
+            tbl_al.setHorizontalHeaderLabels(["Aluno", "Curso", "Turmas", "Presenças", "Frequência"])
+            tbl_al.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            tbl_al.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            tbl_al.setColumnWidth(1, 100)
+            tbl_al.setColumnWidth(3, 90)
+            tbl_al.setColumnWidth(4, 100)
+            tbl_al.setAlternatingRowColors(True)
+            tbl_al.verticalHeader().setVisible(False)
+            tbl_al.setEditTriggers(QTableWidget.NoEditTriggers)
+            tbl_al.setMaximumHeight(220)
+            tbl_al.setStyleSheet("""
+                QTableWidget { background: #1A1500; border: none; color: #FBBF24;
+                    gridline-color: #3A2A00; font-size: 12px; }
+                QTableWidget::item:alternate { background: #1F1A00; }
+                QHeaderView::section { background: #2A2000; color: #F59E0B;
+                    padding: 8px; border: none; font-size: 12px; font-weight: bold; }
+            """)
+            tbl_al.setRowCount(len(baixa))
+            for ri, b in enumerate(baixa):
+                tbl_al.setItem(ri, 0, QTableWidgetItem(b["nome"]))
+                tbl_al.setItem(ri, 1, QTableWidgetItem(b["curso"]))
+                tbl_al.setItem(ri, 2, QTableWidgetItem(b["turmas"]))
+                tbl_al.setItem(ri, 3, QTableWidgetItem(f"{b['presentes']}/{b['total']}"))
+                freq_item = QTableWidgetItem(f"{b['pct']}%")
+                freq_item.setForeground(QColor("#F87171"))
+                tbl_al.setItem(ri, 4, freq_item)
+            alerta_lay.addWidget(tbl_al)
+        else:
+            ok_lbl = QLabel(f"Nenhum aluno com frequência abaixo de {int(limite)}% neste trimestre.")
+            ok_lbl.setStyleSheet("color: #4ADE80; font-size: 13px; font-weight: bold;")
+            alerta_lay.addWidget(ok_lbl)
+        dyn_lay.addWidget(grp_alerta)
+
     def _gerar_pdf(self):
-        mes = self.mes_combo.currentIndex() + 1
+        is_mensal = (self.tipo_periodo_combo.currentIndex() == 0)
         ano = self.ano_spin.value()
-        periodo = f"{_MESES[mes-1]}_{ano}"
+
+        if is_mensal:
+            mes = self.mes_combo.currentIndex() + 1
+            periodo = f"{_MESES[mes-1]}_{ano}"
+            sugestao = f"Relatorio_ABDA_{periodo}.pdf"
+        else:
+            tri_num = self.trimestre_combo.currentData() or (self.trimestre_combo.currentIndex() + 1)
+            sugestao = f"Relatorio_Consolidado_ABDA_{tri_num}Trimestre_{ano}.pdf"
 
         caminho, _ = QFileDialog.getSaveFileName(
             self, "Salvar relatório PDF",
-            str(Path.home() / f"Relatorio_ABDA_{periodo}.pdf"),
+            str(Path.home() / sugestao),
             "PDF (*.pdf)"
         )
         if not caminho:
             return
 
         try:
-            self._gerar_pdf_reportlab(caminho, mes, ano)
+            if is_mensal:
+                self._gerar_pdf_reportlab(caminho, mes, ano)
+            else:
+                self._gerar_pdf_trimestral_reportlab(caminho, tri_num, ano)
             QMessageBox.information(self, "Relatório Concluído",
                                     f"Relatório salvo com sucesso em:\n{caminho}")
         except Exception as e:
@@ -644,28 +956,29 @@ class AbaEstatisticas(QWidget):
         story.append(t_sexo)
         story.append(Spacer(1, 8))
 
-        # Tabela ano a ano de presenças
+        # Tabela ano a ano de presenças (números exatos de presenças — Obs 2)
         idades_dados = stats.get("presenca_por_idade", {})
         if idades_dados:
-            data_idade = [["Idade", "Freq. Masculino", "Freq. Feminino", "Freq. Geral da Idade", "Presenças / Total"]]
+            data_idade = [["Idade", "Presenças Masculino", "Presenças Feminino", "Geral da Idade (Total)"]]
             for ida in sorted(idades_dados.keys()):
                 d = idades_dados[ida]
-                m_t = f"{d['Masculino']['pct']}%" if d['Masculino']['pct'] is not None else "—"
-                f_t = f"{d['Feminino']['pct']}%" if d['Feminino']['pct'] is not None else "—"
-                g_t = f"{d['pct']}%" if d['pct'] is not None else "—"
                 data_idade.append([
-                    f"{ida} anos", m_t, f_t, g_t, f"{d['total_presentes']}/{d['total_registros']}"
+                    f"{ida} anos",
+                    str(d['Masculino']['presentes']),
+                    str(d['Feminino']['presentes']),
+                    str(d['total_presentes']),
                 ])
-            t_idade = Table(data_idade, colWidths=[3.5*cm, 3.5*cm, 3.5*cm, 3.5*cm, 3.5*cm])
+            t_idade = Table(data_idade, colWidths=[4.3*cm, 4.4*cm, 4.4*cm, 4.4*cm])
             t_idade.setStyle(TableStyle([
                 ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#4B5563")),
                 ("TEXTCOLOR", (0,0), (-1,0), colors.white),
                 ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
                 ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
                 ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F8F9FD"), colors.white]),
-                ("FONTSIZE", (0,0), (-1,-1), 8.5),
+                ("FONTSIZE", (0,0), (-1,-1), 9),
                 ("TOPPADDING", (0,0), (-1,-1), 4),
                 ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("ALIGN", (1,0), (-1,-1), "CENTER"),
             ]))
             story.append(t_idade)
         story.append(Spacer(1, 12))
@@ -774,6 +1087,340 @@ class AbaEstatisticas(QWidget):
         story.append(Spacer(1, 4))
         gerado_em = datetime.now().strftime("%d/%m/%Y às %H:%M")
         story.append(Paragraph(f"Relatório gerado em {gerado_em} — Sistema de Chamada ABDA", small))
+
+        doc.build(story)
+
+    def _gerar_pdf_trimestral_reportlab(self, caminho: str, trimestre: int, ano: int):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        )
+
+        stats = db.estatisticas_trimestre(trimestre, ano)
+        baixa = db.alunos_freq_baixa_trimestre(trimestre, ano, self.limite_spin.value())
+        tri_nome = stats["trimestre_nome"]
+        meses = stats["meses"]
+        meses_nomes = [_MESES[m - 1] for m in meses]
+
+        doc = SimpleDocTemplate(
+            caminho, pagesize=A4,
+            leftMargin=1.8*cm, rightMargin=1.8*cm,
+            topMargin=1.8*cm, bottomMargin=1.8*cm
+        )
+        styles = getSampleStyleSheet()
+        story = []
+
+        title_style = ParagraphStyle(
+            "Title2", parent=styles["Title"],
+            fontSize=18, textColor=colors.HexColor("#1A1F2E"),
+            spaceAfter=3, alignment=0
+        )
+        sub_style = ParagraphStyle(
+            "Sub", parent=styles["Normal"],
+            fontSize=10, textColor=colors.HexColor("#6C63FF"),
+            spaceAfter=12
+        )
+        h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12,
+                             textColor=colors.HexColor("#252B3D"), spaceBefore=12, spaceAfter=6)
+        small = ParagraphStyle("Small", parent=styles["Normal"], fontSize=9,
+                                textColor=colors.HexColor("#555"), leading=13)
+
+        # Cabeçalho oficial
+        story.append(Paragraph("Sistema de Chamada ABDA", title_style))
+        story.append(Paragraph("João Victor Pavanelli &amp; Renan Denadai de Paula  •  Relatório Trimestral Consolidado", sub_style))
+        story.append(Paragraph(f"<b>Período de Referência:</b> {tri_nome} de {ano} (" + ", ".join(meses_nomes) + ")", small))
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#6C63FF")))
+        story.append(Spacer(1, 10))
+
+        # 1. Resumo Geral e Horas por Mês no Trimestre
+        story.append(Paragraph("1. Horas por Mês e Resumo Geral de Cursos (Trimestre Consolidado)", h2))
+
+        dm = stats["dados_mensais"]
+        m1, m2, m3 = meses[0], meses[1], meses[2]
+
+        data_resumo = [
+            ["Métrica / Indicador", meses_nomes[0], meses_nomes[1], meses_nomes[2], "Total do Trimestre"],
+            [
+                "Horas — Informática",
+                f"{dm[m1]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+                f"{dm[m2]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+                f"{dm[m3]['horas_curso'].get('Informática', {}).get('horas', 0)}h",
+                f"{stats['horas_curso']['Informática']['horas']}h",
+            ],
+            [
+                "Horas — Robótica",
+                f"{dm[m1]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+                f"{dm[m2]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+                f"{dm[m3]['horas_curso'].get('Robótica', {}).get('horas', 0)}h",
+                f"{stats['horas_curso']['Robótica']['horas']}h",
+            ],
+            [
+                "Total Horas Ministradas",
+                f"{dm[m1]['total_horas']}h",
+                f"{dm[m2]['total_horas']}h",
+                f"{dm[m3]['total_horas']}h",
+                f"{stats['total_horas']}h ({stats['total_minutos']} min)",
+            ],
+            [
+                "Aulas Registradas",
+                str(dm[m1]['horas_curso'].get('Informática', {}).get('aulas', 0) + dm[m1]['horas_curso'].get('Robótica', {}).get('aulas', 0)),
+                str(dm[m2]['horas_curso'].get('Informática', {}).get('aulas', 0) + dm[m2]['horas_curso'].get('Robótica', {}).get('aulas', 0)),
+                str(dm[m3]['horas_curso'].get('Informática', {}).get('aulas', 0) + dm[m3]['horas_curso'].get('Robótica', {}).get('aulas', 0)),
+                str(stats['horas_curso']['Informática']['aulas'] + stats['horas_curso']['Robótica']['aulas']),
+            ],
+            [
+                "Freq. Média — Informática",
+                f"{dm[m1]['freq'].get('Informática') or '—'}%",
+                f"{dm[m2]['freq'].get('Informática') or '—'}%",
+                f"{dm[m3]['freq'].get('Informática') or '—'}%",
+                f"{stats['freq'].get('Informática') or '—'}%",
+            ],
+            [
+                "Freq. Média — Robótica",
+                f"{dm[m1]['freq'].get('Robótica') or '—'}%",
+                f"{dm[m2]['freq'].get('Robótica') or '—'}%",
+                f"{dm[m3]['freq'].get('Robótica') or '—'}%",
+                f"{stats['freq'].get('Robótica') or '—'}%",
+            ],
+            [
+                "Atendimentos Ativos no Mês",
+                str((dm[m1]["contagem"].get("so_info") or 0) + (dm[m1]["contagem"].get("so_robo") or 0) + (dm[m1]["contagem"].get("ambos") or 0)),
+                str((dm[m2]["contagem"].get("so_info") or 0) + (dm[m2]["contagem"].get("so_robo") or 0) + (dm[m2]["contagem"].get("ambos") or 0)),
+                str((dm[m3]["contagem"].get("so_info") or 0) + (dm[m3]["contagem"].get("so_robo") or 0) + (dm[m3]["contagem"].get("ambos") or 0)),
+                f"{stats['atendimentos_acumulados']} acumulados",
+            ],
+        ]
+        t_resumo = Table(data_resumo, colWidths=[5.5*cm, 3*cm, 3*cm, 3*cm, 3*cm])
+        t_resumo.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#6C63FF")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTSIZE", (0,0), (-1,0), 9),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F8F9FD"), colors.white]),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+            ("FONTSIZE", (0,1), (-1,-1), 8.5),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("ALIGN", (1,0), (-1,-1), "CENTER"),
+        ]))
+        story.append(t_resumo)
+        story.append(Spacer(1, 10))
+
+        # 2. Cursos Oferecidos e Consolidação de Beneficiários no Trimestre
+        story.append(Paragraph("2. Cursos Oferecidos e Beneficiários Atendidos no Trimestre", h2))
+        data_cursos = [
+            ["Curso", "Turmas Cadastradas", "Turmas Ativas no Trimestre", "Aulas no Trimestre", "Matrículas Ativas"]
+        ]
+        for c_nome in ("Informática", "Robótica"):
+            ci = stats["cursos_oferecidos"].get(c_nome, {})
+            data_cursos.append([
+                c_nome,
+                str(ci.get("total_turmas", 0)),
+                str(ci.get("turmas_ativas", 0)),
+                str(ci.get("aulas_no_periodo", 0)),
+                str(ci.get("matriculas", 0)),
+            ])
+        t_cursos = Table(data_cursos, colWidths=[4.5*cm, 3.2*cm, 3.2*cm, 3.2*cm, 3.4*cm])
+        t_cursos.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#252B3D")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F8F9FD"), colors.white]),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("ALIGN", (1,0), (-1,-1), "CENTER"),
+        ]))
+        story.append(t_cursos)
+        story.append(Spacer(1, 6))
+
+        # Caixa de Esclarecimento sobre Beneficiários Únicos vs Atendimentos Acumulados
+        cnt_geral = stats["contagem"]
+        tot_cad = (cnt_geral.get("so_info") or 0) + (cnt_geral.get("so_robo") or 0) + (cnt_geral.get("ambos") or 0)
+        bg_m = stats["beneficiarios_genero"].get("Masculino", 0)
+        bg_f = stats["beneficiarios_genero"].get("Feminino", 0)
+        bu_tot = stats["beneficiarios_unicos_total"]
+        atend_acum = stats["atendimentos_acumulados"]
+
+        data_benef = [
+            ["Indicador de Beneficiários", "Masculino", "Feminino", "Total Consolidado"],
+            ["Total de Beneficiários Únicos no Trimestre", str(bg_m), str(bg_f), f"{bu_tot} alunos únicos"],
+            ["Atendimentos Mensais Acumulados no Trimestre", "—", "—", f"{atend_acum} atendimentos mensais"],
+            ["Alunos Matriculados no Banco de Dados", "—", "—", f"{tot_cad} (Ambos Cursos: {cnt_geral.get('ambos', 0)})"],
+        ]
+        t_benef = Table(data_benef, colWidths=[6.5*cm, 3.5*cm, 3.5*cm, 4*cm])
+        t_benef.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1E2538")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F0F4FF"), colors.white]),
+            ("FONTSIZE", (0,0), (-1,-1), 8.5),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("ALIGN", (1,0), (-1,-1), "CENTER"),
+        ]))
+        story.append(t_benef)
+        story.append(Spacer(1, 10))
+
+        # 3. Presença no Trimestre Detalhada por Idade e Sexo (NÚMEROS EXATOS DE PRESENÇA — Obs 2)
+        story.append(Paragraph("3. Presença no Trimestre Detalhada por Idade e Sexo", h2))
+        sm = stats["presenca_por_sexo"]["Masculino"]
+        sf = stats["presenca_por_sexo"]["Feminino"]
+        data_sexo = [
+            ["Sexo", "Presenças", "Faltas / Ausências", "Total de Registros", "Frequência (%)"],
+            ["Masculino", str(sm["presentes"]), str(sm["ausentes"]), str(sm["total"]), f"{sm['pct'] if sm['pct'] is not None else '—'}%"],
+            ["Feminino", str(sf["presentes"]), str(sf["ausentes"]), str(sf["total"]), f"{sf['pct'] if sf['pct'] is not None else '—'}%"],
+        ]
+        t_sexo = Table(data_sexo, colWidths=[4*cm, 3.2*cm, 3.8*cm, 3.5*cm, 3*cm])
+        t_sexo.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#374151")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("ALIGN", (1,0), (-1,-1), "CENTER"),
+        ]))
+        story.append(t_sexo)
+        story.append(Spacer(1, 6))
+
+        # Tabela com números exatos de presenças por idade (Obs 2!)
+        idades_dados = stats.get("presenca_por_idade", {})
+        if idades_dados:
+            data_idade = [["Idade", "Presenças Masculino", "Presenças Feminino", "Geral da Idade (Total)"]]
+            for ida in sorted(idades_dados.keys()):
+                d = idades_dados[ida]
+                data_idade.append([
+                    f"{ida} anos",
+                    str(d['Masculino']['presentes']),
+                    str(d['Feminino']['presentes']),
+                    str(d['total_presentes']),
+                ])
+            t_idade = Table(data_idade, colWidths=[4.3*cm, 4.4*cm, 4.4*cm, 4.4*cm])
+            t_idade.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#4B5563")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F8F9FD"), colors.white]),
+                ("FONTSIZE", (0,0), (-1,-1), 9),
+                ("TOPPADDING", (0,0), (-1,-1), 4),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("ALIGN", (1,0), (-1,-1), "CENTER"),
+            ]))
+            story.append(t_idade)
+        story.append(Spacer(1, 10))
+
+        # 3b. Quantidade de Alunos Matriculados por Idade e Sexo
+        story.append(Paragraph("3b. Quantidade de Alunos Matriculados por Idade e Sexo", h2))
+        idades_rows = stats.get("idades_rows", [])
+        if idades_rows:
+            from datetime import date as _date, datetime as _dt
+            alunos_por_idade: dict = {}
+            hoje_pdf = _date.today()
+            for row in idades_rows:
+                try:
+                    d = _dt.strptime(row["data_nascimento"], "%Y-%m-%d").date()
+                    ida = hoje_pdf.year - d.year - ((hoje_pdf.month, hoje_pdf.day) < (d.month, d.day))
+                except Exception:
+                    continue
+                gen = row.get("genero") or "Não informado"
+                if ida not in alunos_por_idade:
+                    alunos_por_idade[ida] = {"Masculino": 0, "Feminino": 0, "Não informado": 0}
+                alunos_por_idade[ida][gen] = alunos_por_idade[ida].get(gen, 0) + 1
+
+            data_matr = [["Idade", "Masculino", "Feminino", "Não Informado", "Total"]]
+            for ida in sorted(alunos_por_idade.keys()):
+                d = alunos_por_idade[ida]
+                masc = d.get("Masculino", 0)
+                fem = d.get("Feminino", 0)
+                ni = d.get("Não informado", 0)
+                data_matr.append([
+                    f"{ida} anos",
+                    str(masc),
+                    str(fem),
+                    str(ni),
+                    str(masc + fem + ni),
+                ])
+            t_matr = Table(data_matr, colWidths=[3.5*cm, 3.5*cm, 3.5*cm, 3.5*cm, 3.5*cm])
+            t_matr.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#374151")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F8F9FD"), colors.white]),
+                ("FONTSIZE", (0,0), (-1,-1), 9),
+                ("TOPPADDING", (0,0), (-1,-1), 4),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("ALIGN", (1,0), (-1,-1), "CENTER"),
+            ]))
+            story.append(t_matr)
+        story.append(Spacer(1, 10))
+
+        # 4. Evolução de Alunos por Curso a Cada 4 Meses (Quadrimestres)
+        story.append(Paragraph(f"4. Evolução de Alunos por Curso a Cada 4 Meses — Ano {ano}", h2))
+        data_quad = [
+            ["Quadrimestre", "Informática", "Robótica", "Ambos os Cursos", "Total"]
+        ]
+        for q in stats.get("quadrimestres", []):
+            sufixo = " ativos" if q["teve_aulas"] else " matriculados"
+            data_quad.append([
+                q["quadrimestre"],
+                f"{q['info_ativos'] if q['teve_aulas'] else q['info_cadastrados']}{sufixo}",
+                f"{q['robo_ativos'] if q['teve_aulas'] else q['robo_cadastrados']}{sufixo}",
+                f"{q['ambos_ativos'] if q['teve_aulas'] else q['ambos_cadastrados']}{sufixo}",
+                f"{q['total_ativos'] if q['teve_aulas'] else q['total_cadastrados']}{sufixo}",
+            ])
+        t_quad = Table(data_quad, colWidths=[5*cm, 3.2*cm, 3.2*cm, 3.2*cm, 2.9*cm])
+        t_quad.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#6C63FF")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D1D5DB")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F8F9FD"), colors.white]),
+            ("FONTSIZE", (0,0), (-1,-1), 8.5),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("ALIGN", (1,0), (-1,-1), "CENTER"),
+        ]))
+        story.append(t_quad)
+        story.append(Spacer(1, 10))
+
+        # 5. Alerta de Frequência Baixa
+        story.append(Paragraph(f"5. Alerta de Frequência Baixa no Trimestre (Abaixo de {int(self.limite_spin.value())}%)", h2))
+        if baixa:
+            al_rows = [["Aluno", "Curso", "Turmas", "Presenças", "Frequência"]]
+            for b in baixa:
+                al_rows.append([b["nome"], b["curso"], b["turmas"],
+                                f"{b['presentes']}/{b['total']}", f"{b['pct']}%"])
+            t_al = Table(al_rows, colWidths=[5*cm, 3.5*cm, 5.5*cm, 2*cm, 1.5*cm])
+            t_al.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#92400E")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#FFF8E7"), colors.HexColor("#FFFDF0")]),
+                ("TEXTCOLOR", (4,1), (4,-1), colors.HexColor("#DC2626")),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D97706")),
+                ("FONTSIZE", (0,0), (-1,-1), 8.5),
+                ("TOPPADDING", (0,0), (-1,-1), 4),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ]))
+            story.append(t_al)
+        else:
+            story.append(Paragraph(f"Nenhum aluno com frequência abaixo de {int(self.limite_spin.value())}% neste trimestre.", small))
+
+        story.append(Spacer(1, 14))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCDD")))
+        story.append(Spacer(1, 4))
+        gerado_em = datetime.now().strftime("%d/%m/%Y às %H:%M")
+        story.append(Paragraph(f"Relatório consolidado gerado em {gerado_em} — Sistema de Chamada ABDA", small))
 
         doc.build(story)
 

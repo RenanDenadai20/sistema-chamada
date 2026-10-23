@@ -745,6 +745,315 @@ def alunos_freq_baixa(mes: int, ano: int, limite: float = 75.0) -> list[dict]:
     return resultado
 
 
+_NOMES_TRIMESTRES = {
+    1: "1º Trimestre (Jan – Mar)",
+    2: "2º Trimestre (Abr – Jun)",
+    3: "3º Trimestre (Jul – Set)",
+    4: "4º Trimestre (Out – Dez)",
+}
+
+_MESES_DO_TRIMESTRE = {
+    1: [1, 2, 3],
+    2: [4, 5, 6],
+    3: [7, 8, 9],
+    4: [10, 11, 12],
+}
+
+
+def alunos_freq_baixa_trimestre(trimestre: int, ano: int, limite: float = 75.0) -> list[dict]:
+    meses = _MESES_DO_TRIMESTRE.get(trimestre, [7, 8, 9])
+    meses_str = [f"{m:02d}" for m in meses]
+    ano_str = str(ano)
+    resultado = []
+    with get_conn() as conn:
+        alunos = conn.execute("SELECT * FROM alunos").fetchall()
+        for a in alunos:
+            cursos_verificar = []
+            if a["curso"] in ("Informática", "Ambos"):
+                cursos_verificar.append("Informática")
+            if a["curso"] in ("Robótica", "Ambos"):
+                cursos_verificar.append("Robótica")
+            for curso in cursos_verificar:
+                rows = conn.execute(
+                    """SELECT p.presente
+                       FROM presencas p
+                       JOIN chamadas c ON c.id = p.chamada_id
+                       JOIN turmas t ON t.id = c.turma_id
+                       WHERE p.aluno_id = ? AND t.curso = ?
+                         AND strftime('%m', c.data) IN (?, ?, ?)
+                         AND strftime('%Y', c.data) = ?""",
+                    (a["id"], curso, meses_str[0], meses_str[1], meses_str[2], ano_str),
+                ).fetchall()
+                if rows:
+                    total = len(rows)
+                    presentes = sum(r["presente"] for r in rows)
+                    pct = presentes / total * 100
+                    if pct < limite:
+                        turmas = conn.execute(
+                            """SELECT t.nome FROM turmas t
+                               JOIN aluno_turma at2 ON at2.turma_id = t.id
+                               WHERE at2.aluno_id = ? AND t.curso = ?""",
+                            (a["id"], curso),
+                        ).fetchall()
+                        turmas_str = ", ".join(r["nome"] for r in turmas)
+                        resultado.append({
+                            "aluno_id": a["id"],
+                            "nome": a["nome"],
+                            "curso": curso,
+                            "turmas": turmas_str,
+                            "pct": round(pct, 1),
+                            "presentes": presentes,
+                            "total": total,
+                        })
+    return resultado
+
+
+def estatisticas_trimestre(trimestre: int, ano: int) -> dict:
+    """Calcula estatísticas trimestrais consolidadas e mês a mês para o trimestre indicado (1 a 4)."""
+    meses = _MESES_DO_TRIMESTRE.get(trimestre, [7, 8, 9])
+    meses_str = [f"{m:02d}" for m in meses]
+    ano_str = str(ano)
+
+    # 1. Estatísticas de cada mês individual do trimestre
+    dados_mensais = {}
+    atendimentos_acumulados = 0
+    for m in meses:
+        s_m = estatisticas_mes(m, ano)
+        dados_mensais[m] = s_m
+        # soma atendimentos/matrículas ativas dos cursos no mês
+        ci_m = s_m["cursos_oferecidos"].get("Informática", {}).get("matriculas", 0)
+        cr_m = s_m["cursos_oferecidos"].get("Robótica", {}).get("matriculas", 0)
+        # alunos únicos com chamada ou matriculados ativos no mês
+        cnt_m = s_m["contagem"]
+        tot_m = (cnt_m.get("so_info") or 0) + (cnt_m.get("so_robo") or 0) + (cnt_m.get("ambos") or 0)
+        atendimentos_acumulados += tot_m
+
+    with get_conn() as conn:
+        # 2. Horas totais por curso no trimestre
+        horas_curso = {}
+        for c in ("Informática", "Robótica"):
+            row = conn.execute(
+                """SELECT SUM(
+                       (strftime('%H', t.horario_fim) - strftime('%H', t.horario_inicio)) * 60 +
+                       (strftime('%M', t.horario_fim) - strftime('%M', t.horario_inicio))
+                   ) as minutos,
+                   COUNT(DISTINCT c.id) as total_aulas
+                   FROM chamadas c
+                   JOIN turmas t ON t.id = c.turma_id
+                   WHERE t.curso = ? AND strftime('%m', c.data) IN (?, ?, ?) AND strftime('%Y', c.data) = ?""",
+                (c, meses_str[0], meses_str[1], meses_str[2], ano_str),
+            ).fetchone()
+            m_min = row["minutos"] or 0
+            horas_curso[c] = {
+                "minutos": m_min,
+                "horas": round(m_min / 60, 1),
+                "aulas": row["total_aulas"] or 0,
+            }
+
+        total_min = horas_curso["Informática"]["minutos"] + horas_curso["Robótica"]["minutos"]
+        total_horas = round(total_min / 60, 1)
+
+        # 3. Cursos oferecidos no trimestre
+        cursos_oferecidos = {}
+        for c in ("Informática", "Robótica"):
+            tot_turmas = conn.execute("SELECT COUNT(*) as qtd FROM turmas WHERE curso=?", (c,)).fetchone()["qtd"]
+            turmas_com_aulas = conn.execute(
+                """SELECT COUNT(DISTINCT c.turma_id) as turmas_ativas,
+                          COUNT(c.id) as aulas_dadas
+                   FROM chamadas c
+                   JOIN turmas t ON t.id = c.turma_id
+                   WHERE t.curso = ? AND strftime('%m', c.data) IN (?, ?, ?) AND strftime('%Y', c.data) = ?""",
+                (c, meses_str[0], meses_str[1], meses_str[2], ano_str),
+            ).fetchone()
+            matriculas_curso = conn.execute(
+                """SELECT COUNT(*) as qtd FROM aluno_turma at2
+                   JOIN turmas t ON t.id = at2.turma_id
+                   WHERE t.curso = ?""", (c,),
+            ).fetchone()["qtd"]
+
+            cursos_oferecidos[c] = {
+                "total_turmas": tot_turmas,
+                "turmas_ativas": turmas_com_aulas["turmas_ativas"] or 0,
+                "aulas_no_periodo": turmas_com_aulas["aulas_dadas"] or 0,
+                "matriculas": matriculas_curso,
+                "horas": horas_curso[c]["horas"],
+                "minutos": horas_curso[c]["minutos"],
+            }
+
+        # 4. Presença dos alunos por curso no trimestre
+        presenca_cursos = {}
+        freq = {}
+        for c in ("Informática", "Robótica"):
+            row = conn.execute(
+                """SELECT
+                       SUM(CASE WHEN p.presente = 1 THEN 1 ELSE 0 END) as presentes,
+                       SUM(CASE WHEN p.presente = 0 THEN 1 ELSE 0 END) as ausentes,
+                       COUNT(p.id) as total
+                   FROM presencas p
+                   JOIN chamadas c ON c.id = p.chamada_id
+                   JOIN turmas t ON t.id = c.turma_id
+                   WHERE t.curso = ? AND strftime('%m', c.data) IN (?, ?, ?) AND strftime('%Y', c.data) = ?""",
+                (c, meses_str[0], meses_str[1], meses_str[2], ano_str),
+            ).fetchone()
+            tot = row["total"] or 0
+            pres = row["presentes"] or 0
+            aus = row["ausentes"] or 0
+            pct = round(pres / tot * 100, 1) if tot > 0 else None
+            presenca_cursos[c] = {
+                "presentes": pres,
+                "ausentes": aus,
+                "total": tot,
+                "pct": pct,
+            }
+            freq[c] = pct
+
+        # 5. Presença detalhada por idade e sexo no trimestre
+        presencas_detalhadas = conn.execute(
+            """SELECT a.data_nascimento, a.genero, p.presente, t.curso
+               FROM presencas p
+               JOIN chamadas c ON c.id = p.chamada_id
+               JOIN turmas t ON t.id = c.turma_id
+               JOIN alunos a ON a.id = p.aluno_id
+               WHERE strftime('%m', c.data) IN (?, ?, ?) AND strftime('%Y', c.data) = ?""",
+            (meses_str[0], meses_str[1], meses_str[2], ano_str),
+        ).fetchall()
+
+        presenca_por_sexo = {
+            "Masculino": {"presentes": 0, "ausentes": 0, "total": 0, "pct": None},
+            "Feminino": {"presentes": 0, "ausentes": 0, "total": 0, "pct": None},
+        }
+        presenca_por_idade = {}
+
+        hoje = datetime.now().date()
+        for r in presencas_detalhadas:
+            gen = r["genero"]
+            pres = r["presente"]
+            if gen in presenca_por_sexo:
+                if pres == 1:
+                    presenca_por_sexo[gen]["presentes"] += 1
+                else:
+                    presenca_por_sexo[gen]["ausentes"] += 1
+                presenca_por_sexo[gen]["total"] += 1
+
+            if r["data_nascimento"]:
+                try:
+                    d = datetime.strptime(r["data_nascimento"], "%Y-%m-%d").date()
+                    idade = hoje.year - d.year - ((hoje.month, hoje.day) < (d.month, d.day))
+                    if idade not in presenca_por_idade:
+                        presenca_por_idade[idade] = {
+                            "Masculino": {"presentes": 0, "total": 0, "pct": None},
+                            "Feminino": {"presentes": 0, "total": 0, "pct": None},
+                            "total_presentes": 0,
+                            "total_registros": 0,
+                            "pct": None,
+                        }
+                    item_id = presenca_por_idade[idade]
+                    if gen in ("Masculino", "Feminino"):
+                        item_id[gen]["total"] += 1
+                        if pres == 1:
+                            item_id[gen]["presentes"] += 1
+                    item_id["total_registros"] += 1
+                    if pres == 1:
+                        item_id["total_presentes"] += 1
+                except Exception:
+                    pass
+
+        for g in presenca_por_sexo:
+            tg = presenca_por_sexo[g]["total"]
+            if tg > 0:
+                presenca_por_sexo[g]["pct"] = round(presenca_por_sexo[g]["presentes"] / tg * 100, 1)
+
+        for ida, dados in presenca_por_idade.items():
+            for g in ("Masculino", "Feminino"):
+                tg = dados[g]["total"]
+                if tg > 0:
+                    dados[g]["pct"] = round(dados[g]["presentes"] / tg * 100, 1)
+            tot_ida = dados["total_registros"]
+            if tot_ida > 0:
+                dados["pct"] = round(dados["total_presentes"] / tot_ida * 100, 1)
+
+        # 6. Alunos beneficiários únicos atendidos com chamadas no trimestre
+        beneficiarios_rows = conn.execute(
+            """SELECT DISTINCT a.id, a.nome, a.genero, a.curso, a.data_nascimento
+               FROM presencas p
+               JOIN chamadas c ON c.id = p.chamada_id
+               JOIN alunos a ON a.id = p.aluno_id
+               WHERE strftime('%m', c.data) IN (?, ?, ?) AND strftime('%Y', c.data) = ?""",
+            (meses_str[0], meses_str[1], meses_str[2], ano_str),
+        ).fetchall()
+
+        beneficiarios_genero = {"Masculino": 0, "Feminino": 0, "Outro": 0}
+        beneficiarios_curso = {"Informática": 0, "Robótica": 0, "Ambos": 0}
+        for b in beneficiarios_rows:
+            gen = b["genero"] or "Outro"
+            if gen in beneficiarios_genero:
+                beneficiarios_genero[gen] += 1
+            cur = b["curso"] or "Ambos"
+            if cur in beneficiarios_curso:
+                beneficiarios_curso[cur] += 1
+
+        # 7. Contagem geral cadastrada
+        contagem = conn.execute(
+            """SELECT
+               SUM(CASE WHEN curso='Informática' THEN 1 ELSE 0 END) as so_info,
+               SUM(CASE WHEN curso='Robótica' THEN 1 ELSE 0 END) as so_robo,
+               SUM(CASE WHEN curso='Ambos' THEN 1 ELSE 0 END) as ambos
+               FROM alunos"""
+        ).fetchone()
+
+        genero = conn.execute(
+            """SELECT curso, genero, COUNT(*) as qtd
+               FROM alunos
+               WHERE genero IS NOT NULL AND genero != ''
+               GROUP BY curso, genero"""
+        ).fetchall()
+
+        matriculas = conn.execute(
+            """SELECT t.curso, COUNT(*) as qtd
+               FROM aluno_turma at2
+               JOIN turmas t ON t.id = at2.turma_id
+               GROUP BY t.curso"""
+        ).fetchall()
+
+        idades_rows = conn.execute(
+            """SELECT a.data_nascimento, a.genero, a.curso
+               FROM alunos a
+               WHERE a.data_nascimento IS NOT NULL AND a.data_nascimento != ''"""
+        ).fetchall()
+
+        alunos_rows = conn.execute("SELECT * FROM alunos").fetchall()
+
+    quads = alunos_por_quadrimestre(ano)
+
+    return {
+        "trimestre": trimestre,
+        "trimestre_nome": _NOMES_TRIMESTRES.get(trimestre, f"{trimestre}º Trimestre"),
+        "meses": meses,
+        "ano": ano,
+        "dados_mensais": dados_mensais,
+        "total_minutos": total_min,
+        "total_horas": total_horas,
+        "horas_curso": horas_curso,
+        "cursos_oferecidos": cursos_oferecidos,
+        "presenca_cursos": presenca_cursos,
+        "presenca_por_sexo": presenca_por_sexo,
+        "presenca_por_idade": presenca_por_idade,
+        "beneficiarios_unicos_total": len(beneficiarios_rows),
+        "beneficiarios_genero": beneficiarios_genero,
+        "beneficiarios_curso": beneficiarios_curso,
+        "atendimentos_acumulados": atendimentos_acumulados,
+        "contagem": dict(contagem),
+        "genero": [dict(r) for r in genero],
+        "freq": freq,
+        "matriculas": [dict(r) for r in matriculas],
+        "idades_rows": [dict(r) for r in idades_rows],
+        "alunos_rows": [dict(r) for r in alunos_rows],
+        "quadrimestres": quads,
+        "limite_freq": 75.0,
+    }
+
+
+
 # ---------------------------------------------------------------------------
 # Ocorrências
 # ---------------------------------------------------------------------------
