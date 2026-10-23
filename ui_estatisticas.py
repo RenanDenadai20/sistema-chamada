@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QScrollArea, QFrame, QGridLayout, QGroupBox, QSpinBox,
-    QFileDialog, QMessageBox, QSizePolicy, QDoubleSpinBox
+    QFileDialog, QMessageBox, QSizePolicy, QDoubleSpinBox,
+    QDialog, QRadioButton, QButtonGroup
 )
 
 import db
@@ -61,6 +62,202 @@ def _card(titulo: str, valor: str, subtitulo: str = "", cor_val: str = "#6C63FF"
         lay.addWidget(s)
 
     return frame
+
+
+class DialogoSelecaoPeriodoPDF(QDialog):
+    """
+    Diálogo modal para selecionar o período de exportação do relatório em PDF.
+    Apresenta claramente os 4 trimestres do ano (consolidando os 3 meses correspondentes)
+    e a opção de relatório mensal individual.
+    """
+    def __init__(self, parent=None, ano_padrao=None, trimestre_padrao=None, mes_padrao=None):
+        super().__init__(parent)
+        self.setWindowTitle("Exportar Relatório em PDF — Seleção de Período")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1A1F2E;
+                color: #E0E6F0;
+            }
+            QLabel {
+                color: #E0E6F0;
+            }
+            QGroupBox {
+                border: 1px solid #3A4560;
+                border-radius: 10px;
+                margin-top: 14px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #9AA3C0;
+                padding: 16px 14px 14px 14px;
+                background: #1E2233;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 14px;
+                padding: 0 4px;
+            }
+            QRadioButton {
+                color: #E0E6F0;
+                font-size: 13px;
+                padding: 6px 4px;
+                spacing: 8px;
+            }
+            QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border: 2px solid #5A6588;
+                background: #252B3D;
+            }
+            QRadioButton::indicator:checked {
+                background: #6C63FF;
+                border: 2px solid #8B85FF;
+            }
+            QRadioButton:hover {
+                color: #FFFFFF;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+
+        # Cabeçalho
+        header_lay = QVBoxLayout()
+        header_lay.setSpacing(4)
+        lbl_titulo = QLabel("Exportar Relatório Oficial em PDF")
+        lbl_titulo.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFFFFF;")
+        header_lay.addWidget(lbl_titulo)
+
+        lbl_desc = QLabel("Escolha o período de referência para gerar o relatório consolidado ou mensal:")
+        lbl_desc.setStyleSheet("font-size: 12px; color: #9AA3C0;")
+        lbl_desc.setWordWrap(True)
+        header_lay.addWidget(lbl_desc)
+        layout.addLayout(header_lay)
+
+        # Seleção de Ano
+        ano_row = QHBoxLayout()
+        ano_lbl = QLabel("Ano de Referência:")
+        ano_lbl.setStyleSheet("font-size: 13px; font-weight: bold; color: #C2C9DB;")
+        ano_row.addWidget(ano_lbl)
+
+        self.ano_spin = QSpinBox()
+        self.ano_spin.setRange(2020, 2050)
+        self.ano_spin.setValue(ano_padrao or date.today().year)
+        self.ano_spin.setStyleSheet("""
+            QSpinBox {
+                background: #252B3D; border: 1px solid #3A4560; border-radius: 8px;
+                color: #FFFFFF; padding: 6px 12px; font-size: 14px; font-weight: bold; min-width: 90px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                background: #3A4560; border-radius: 4px; width: 18px;
+            }
+        """)
+        ano_row.addWidget(self.ano_spin)
+        ano_row.addStretch()
+        layout.addLayout(ano_row)
+
+        # Grupo Trimestral (Consolidado)
+        grp_tri = QGroupBox("Relatórios Trimestrais Consolidados (Junta os 3 meses em um único arquivo)")
+        lay_tri = QVBoxLayout(grp_tri)
+        lay_tri.setSpacing(10)
+
+        self.btn_group = QButtonGroup(self)
+
+        self.radios_tri = []
+        trimestres_info = [
+            (1, "1º Trimestre", "Janeiro, Fevereiro e Março"),
+            (2, "2º Trimestre", "Abril, Maio e Junho"),
+            (3, "3º Trimestre", "Julho, Agosto e Setembro"),
+            (4, "4º Trimestre", "Outubro, Novembro e Dezembro"),
+        ]
+
+        tri_sel = trimestre_padrao or ((date.today().month - 1) // 3 + 1)
+        for num, nome, meses_txt in trimestres_info:
+            rb = QRadioButton(f"<b>{nome}</b> — {meses_txt}")
+            rb.setProperty("tipo", "trimestral")
+            rb.setProperty("trimestre", num)
+            self.btn_group.addButton(rb)
+            lay_tri.addWidget(rb)
+            self.radios_tri.append(rb)
+            if num == tri_sel and not mes_padrao:
+                rb.setChecked(True)
+
+        layout.addWidget(grp_tri)
+
+        # Grupo Mensal Individual
+        grp_mes = QGroupBox("Ou Relatório Mensal Individual")
+        lay_mes = QHBoxLayout(grp_mes)
+        lay_mes.setSpacing(12)
+
+        self.radio_mensal = QRadioButton("Mês individual:")
+        self.radio_mensal.setProperty("tipo", "mensal")
+        self.btn_group.addButton(self.radio_mensal)
+        lay_mes.addWidget(self.radio_mensal)
+
+        self.combo_mes = QComboBox()
+        for m in _MESES:
+            self.combo_mes.addItem(m)
+        self.combo_mes.setCurrentIndex((mes_padrao - 1) if mes_padrao else (date.today().month - 1))
+        self.combo_mes.setStyleSheet("""
+            QComboBox {
+                background: #252B3D; border: 1px solid #3A4560; border-radius: 8px;
+                color: #FFFFFF; padding: 6px 12px; font-size: 13px; min-width: 160px;
+            }
+            QComboBox QAbstractItemView { background: #252B3D; color: #FFFFFF; }
+        """)
+        lay_mes.addWidget(self.combo_mes)
+        lay_mes.addStretch()
+
+        if mes_padrao:
+            self.radio_mensal.setChecked(True)
+
+        layout.addWidget(grp_mes)
+
+        # Se clicar no combo_mes, ativa o radio_mensal automaticamente
+        self.combo_mes.activated.connect(lambda: self.radio_mensal.setChecked(True))
+
+        # Botões de Ação no Rodapé
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(12)
+        btn_box.addStretch()
+
+        btn_cancelar = QPushButton("Cancelar")
+        btn_cancelar.setStyleSheet("""
+            QPushButton {
+                background: #374151; color: white; border-radius: 8px;
+                padding: 9px 20px; font-size: 13px; font-weight: bold;
+            }
+            QPushButton:hover { background: #4B5563; }
+        """)
+        btn_cancelar.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancelar)
+
+        btn_gerar = QPushButton("Gerar Relatório PDF")
+        btn_gerar.setStyleSheet(_BTN_PDF)
+        btn_gerar.clicked.connect(self.accept)
+        btn_box.addWidget(btn_gerar)
+
+        layout.addLayout(btn_box)
+
+    def obter_selecao(self) -> dict:
+        ano = self.ano_spin.value()
+        if self.radio_mensal.isChecked():
+            return {
+                "tipo": "mensal",
+                "mes": self.combo_mes.currentIndex() + 1,
+                "ano": ano,
+            }
+        for rb in self.radios_tri:
+            if rb.isChecked():
+                return {
+                    "tipo": "trimestral",
+                    "trimestre": rb.property("trimestre"),
+                    "ano": ano,
+                }
+        return {"tipo": "trimestral", "trimestre": 1, "ano": ano}
 
 
 class AbaEstatisticas(QWidget):
@@ -801,16 +998,40 @@ class AbaEstatisticas(QWidget):
         dyn_lay.addWidget(grp_alerta)
 
     def _gerar_pdf(self):
-        is_mensal = (self.tipo_periodo_combo.currentIndex() == 0)
-        ano = self.ano_spin.value()
+        ano_atual = self.ano_spin.value()
+        is_mensal_ui = (self.tipo_periodo_combo.currentIndex() == 0)
+        tri_atual = self.trimestre_combo.currentData() or (self.trimestre_combo.currentIndex() + 1)
+        mes_atual = (self.mes_combo.currentIndex() + 1) if is_mensal_ui else None
 
-        if is_mensal:
-            mes = self.mes_combo.currentIndex() + 1
-            periodo = f"{_MESES[mes-1]}_{ano}"
-            sugestao = f"Relatorio_ABDA_{periodo}.pdf"
+        dlg = DialogoSelecaoPeriodoPDF(
+            self,
+            ano_padrao=ano_atual,
+            trimestre_padrao=tri_atual if not is_mensal_ui else None,
+            mes_padrao=mes_atual if is_mensal_ui else None,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        sel = dlg.obter_selecao()
+        ano = sel["ano"]
+
+        # Sincroniza a interface da aba com o período selecionado para que o usuário veja os dados na tela
+        self.ano_spin.setValue(ano)
+        if sel["tipo"] == "trimestral":
+            self.tipo_periodo_combo.setCurrentIndex(1)
+            self.trimestre_combo.setCurrentIndex(sel["trimestre"] - 1)
         else:
-            tri_num = self.trimestre_combo.currentData() or (self.trimestre_combo.currentIndex() + 1)
-            sugestao = f"Relatorio_Consolidado_ABDA_{tri_num}Trimestre_{ano}.pdf"
+            self.tipo_periodo_combo.setCurrentIndex(0)
+            self.mes_combo.setCurrentIndex(sel["mes"] - 1)
+        self.atualizar()
+
+        if sel["tipo"] == "trimestral":
+            tri_num = sel["trimestre"]
+            nomes_curtos = {1: "Jan_Fev_Mar", 2: "Abr_Mai_Jun", 3: "Jul_Ago_Set", 4: "Out_Nov_Dez"}
+            sugestao = f"Relatorio_Consolidado_ABDA_{tri_num}Trimestre_{nomes_curtos.get(tri_num, '')}_{ano}.pdf"
+        else:
+            mes = sel["mes"]
+            sugestao = f"Relatorio_ABDA_{_MESES[mes-1]}_{ano}.pdf"
 
         caminho, _ = QFileDialog.getSaveFileName(
             self, "Salvar relatório PDF",
@@ -821,12 +1042,23 @@ class AbaEstatisticas(QWidget):
             return
 
         try:
-            if is_mensal:
-                self._gerar_pdf_reportlab(caminho, mes, ano)
+            if sel["tipo"] == "trimestral":
+                self._gerar_pdf_trimestral_reportlab(caminho, sel["trimestre"], ano)
             else:
-                self._gerar_pdf_trimestral_reportlab(caminho, tri_num, ano)
-            QMessageBox.information(self, "Relatório Concluído",
-                                    f"Relatório salvo com sucesso em:\n{caminho}")
+                self._gerar_pdf_reportlab(caminho, sel["mes"], ano)
+
+            resp = QMessageBox.information(
+                self, "Relatório Concluído",
+                f"Relatório PDF salvo com sucesso em:\n{caminho}\n\nDeseja abrir o arquivo agora?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if resp == QMessageBox.Yes:
+                import os
+                try:
+                    os.startfile(caminho)
+                except Exception:
+                    pass
         except Exception as e:
             QMessageBox.critical(self, "Erro ao gerar PDF", str(e))
 
@@ -1192,6 +1424,27 @@ class AbaEstatisticas(QWidget):
                 str((dm[m2]["contagem"].get("so_info") or 0) + (dm[m2]["contagem"].get("so_robo") or 0) + (dm[m2]["contagem"].get("ambos") or 0)),
                 str((dm[m3]["contagem"].get("so_info") or 0) + (dm[m3]["contagem"].get("so_robo") or 0) + (dm[m3]["contagem"].get("ambos") or 0)),
                 f"{stats['atendimentos_acumulados']} acumulados",
+            ],
+            [
+                "Presenças — Masculino",
+                str(dm[m1]["presenca_por_sexo"]["Masculino"]["presentes"]),
+                str(dm[m2]["presenca_por_sexo"]["Masculino"]["presentes"]),
+                str(dm[m3]["presenca_por_sexo"]["Masculino"]["presentes"]),
+                str(stats["presenca_por_sexo"]["Masculino"]["presentes"]),
+            ],
+            [
+                "Presenças — Feminino",
+                str(dm[m1]["presenca_por_sexo"]["Feminino"]["presentes"]),
+                str(dm[m2]["presenca_por_sexo"]["Feminino"]["presentes"]),
+                str(dm[m3]["presenca_por_sexo"]["Feminino"]["presentes"]),
+                str(stats["presenca_por_sexo"]["Feminino"]["presentes"]),
+            ],
+            [
+                "Total Geral de Presenças",
+                str(dm[m1]["presenca_por_sexo"]["Masculino"]["presentes"] + dm[m1]["presenca_por_sexo"]["Feminino"]["presentes"]),
+                str(dm[m2]["presenca_por_sexo"]["Masculino"]["presentes"] + dm[m2]["presenca_por_sexo"]["Feminino"]["presentes"]),
+                str(dm[m3]["presenca_por_sexo"]["Masculino"]["presentes"] + dm[m3]["presenca_por_sexo"]["Feminino"]["presentes"]),
+                str(stats["presenca_por_sexo"]["Masculino"]["presentes"] + stats["presenca_por_sexo"]["Feminino"]["presentes"]),
             ],
         ]
         t_resumo = Table(data_resumo, colWidths=[5.5*cm, 3*cm, 3*cm, 3*cm, 3*cm])
